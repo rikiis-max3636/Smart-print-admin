@@ -103,13 +103,43 @@
     };
     const CURRENCY = "₹";
 
+    // Canvas me paisa kaise lage? (Customer page me bhi same value rakhna)
+    //   true  = printed page (sheet) ke hisaab se
+    //   false = har photo ke hisaab se
+    const CANVAS_PRICE_PER_SHEET = true;
+
+    // =====================================================
+    // 🖼️ CANVAS LAYOUTS (A4 = 210 x 297 mm). Box = [x, y, width, height] in mm
+    // ⚠️ Customer (/demo) page me bhi yahi layouts rakhna.
+    // =====================================================
+    const LAYOUTS = {
+        two_side: {
+            name: "2 box (side by side)",
+            boxes: [[13, 19, 80, 51], [113, 19, 80, 51]]
+        },
+        two_stack: {
+            name: "2 box (upar-neeche)",
+            boxes: [[16, 19, 178, 104], [16, 151, 178, 104]]
+        },
+        eight: {
+            name: "8 box",
+            boxes: [
+                [13, 19, 80, 51],  [113, 19, 80, 51],
+                [13, 87, 80, 51],  [113, 87, 80, 51],
+                [13, 155, 80, 51], [113, 155, 80, 51],
+                [13, 222, 80, 51], [113, 222, 80, 51]
+            ]
+        }
+    };
+    const BASE_W = 210, BASE_H = 297;
+
     // =====================================================
     // 📄 PAPER SETTINGS — print ek hi page me fit karne ke liye
     // Default A4 (210 x 297 mm). Print dialog me bhi A4 hi chunna.
     // =====================================================
     const PAPER_WIDTH_MM = 210;
     const PAPER_HEIGHT_MM = 297;
-    const PAGE_PADDING_MM = 5;     // kinare ka khali space
+    const PAGE_PADDING_MM = 5;     // kinare ka khali space (normal print me)
 
     // =====================================================
     // 🧹 AUTO CLEAN SETTINGS
@@ -153,6 +183,8 @@
         return c;
     }
 
+    function pct(v, base) { return (v / base * 100).toFixed(3) + '%'; }
+
     // Record se pages (images) ki list nikalta hai
     function getPages(rec) {
         let list = [];
@@ -166,10 +198,24 @@
         return list.filter(p => typeof p === 'string' && p.startsWith('data:image/'));
     }
 
+    // Ek copy me kitne asli printed pages (sheets) lagenge
+    function sheetCount(n, key) {
+        const lay = LAYOUTS[key];
+        if (!lay) return n;
+        return Math.ceil(n / lay.boxes.length);
+    }
+
+    // Paisa kitne units par lagega (ek copy me)
+    function billUnits(n, key) {
+        const lay = LAYOUTS[key];
+        if (!lay) return n;
+        return CANVAS_PRICE_PER_SHEET ? Math.ceil(n / lay.boxes.length) : n;
+    }
+
     function calcAmount(item) {
         const rate = item.colorMode === 'color' ? PRICES.color : PRICES.bw;
-        const pc = item.pageList ? item.pageList.length : (parseInt(item.pageCount, 10) || 1);
-        return rate * pc * safeCopies(item.copies);
+        const n = item.pageList ? item.pageList.length : (parseInt(item.pageCount, 10) || 1);
+        return rate * billUnits(n, item.layout) * safeCopies(item.copies);
     }
 
     // ---------- Aaj ki kamai (alag chhote node `stats/<date>` me save hoti hai) ----------
@@ -233,6 +279,7 @@
                 if (rec.createdAt < cutoff && !busyIds.has(id)) return; // expire ho chuki, cleaner hata dega
 
                 const item = { id, ...rec };
+                item.layout = LAYOUTS[rec.layout] ? rec.layout : 'none';
                 item.pageList = getPages(rec);
                 currentQueue.push(item);
                 listDiv.appendChild(createCard(item));
@@ -274,6 +321,8 @@
         const copies = safeCopies(item.copies);
         const amount = calcAmount(item);
         const filePages = item.pageList.length;
+        const sheetsTotal = sheetCount(filePages, item.layout) * copies;
+        const layoutName = LAYOUTS[item.layout] ? LAYOUTS[item.layout].name : "Normal";
 
         const card = document.createElement("div");
         card.className = "print-card";
@@ -326,8 +375,10 @@
         // Footer
         const footer = document.createElement("div");
         footer.className = "card-footer";
-        footer.appendChild(makeRow("Pages in file:", filePages, " Page(s)"));
+        footer.appendChild(makeRow("Photos / pages in file:", filePages, ""));
+        footer.appendChild(makeRow("Layout:", layoutName, ""));
         footer.appendChild(makeRow("Requested Copies:", copies, " Copy(s)"));
+        footer.appendChild(makeRow("Total pages to print:", sheetsTotal, " Page(s)"));
         footer.appendChild(makeRow("Amount (collect at counter):", CURRENCY + amount, ""));
 
         const btn = document.createElement("button");
@@ -340,6 +391,39 @@
         card.appendChild(preview);
         card.appendChild(footer);
         return card;
+    }
+
+    // Print ke liye sheets ka HTML banata hai
+    function buildSheetsHtml(pageList, copies, layoutKey, innerW, innerH, sheetH) {
+        const lay = LAYOUTS[layoutKey];
+        let html = '';
+
+        if (!lay) {
+            // Normal: har photo/page alag sheet par, fit hokar (crop nahi)
+            for (let c = 0; c < copies; c++) {
+                for (let p = 0; p < pageList.length; p++) {
+                    html += '<div class="sheet"><img src="' + pageList[p] + '"></div>';
+                }
+            }
+            return html;
+        }
+
+        // Canvas: ek sheet par kai photo, boxes ke andar fit (crop nahi)
+        const slots = lay.boxes.length;
+        for (let c = 0; c < copies; c++) {
+            for (let s = 0; s < pageList.length; s += slots) {
+                const chunk = pageList.slice(s, s + slots);
+                html += '<div class="sheet cv">';
+                for (let i = 0; i < chunk.length; i++) {
+                    const b = lay.boxes[i];
+                    html += '<div class="box" style="left:' + pct(b[0], BASE_W) + ';top:' + pct(b[1], BASE_H) +
+                            ';width:' + pct(b[2], BASE_W) + ';height:' + pct(b[3], BASE_H) + ';">' +
+                            '<img src="' + chunk[i] + '"></div>';
+                }
+                html += '</div>';
+            }
+        }
+        return html;
     }
 
     // Print window kholta hai. Print dialog complete hote hi (afterprint) window khud
@@ -373,17 +457,11 @@
                 ? 'filter: grayscale(100%); -webkit-filter: grayscale(100%);'
                 : '';
 
-            // Har sheet = ek printed page. Image uske andar fit hoti hai (crop nahi, ek hi page).
             const sheetH = PAPER_HEIGHT_MM - 1;                          // 1mm kam, taki extra khali page na bane
             const innerW = PAPER_WIDTH_MM - (PAGE_PADDING_MM * 2);
             const innerH = sheetH - (PAGE_PADDING_MM * 2);
 
-            let sheetsHtml = '';
-            for (let c = 0; c < copies; c++) {
-                for (let p = 0; p < pageList.length; p++) {
-                    sheetsHtml += '<div class="sheet"><img src="' + pageList[p] + '"></div>';
-                }
-            }
+            const sheetsHtml = buildSheetsHtml(pageList, copies, item.layout, innerW, innerH, sheetH);
 
             const css =
                 '@page { size: ' + PAPER_WIDTH_MM + 'mm ' + PAPER_HEIGHT_MM + 'mm; margin: 0; }' +
@@ -391,9 +469,12 @@
                 '.sheet { width: ' + PAPER_WIDTH_MM + 'mm; height: ' + sheetH + 'mm; padding: ' + PAGE_PADDING_MM + 'mm; box-sizing: border-box; ' +
                     'display: flex; align-items: center; justify-content: center; overflow: hidden; ' +
                     'page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; }' +
-                '.sheet:last-child { page-break-after: auto; break-after: auto; }' +
+                '.sheet:last-of-type { page-break-after: auto; break-after: auto; }' +
                 '.sheet img { display: block; width: auto; height: auto; ' +
-                    'max-width: ' + innerW + 'mm; max-height: ' + innerH + 'mm; object-fit: contain; ' + filterStyle + ' }';
+                    'max-width: ' + innerW + 'mm; max-height: ' + innerH + 'mm; object-fit: contain; ' + filterStyle + ' }' +
+                '.sheet.cv { display: block; position: relative; padding: 0; }' +
+                '.sheet.cv .box { position: absolute; display: flex; align-items: center; justify-content: center; overflow: hidden; }' +
+                '.sheet.cv .box img { width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; ' + filterStyle + ' }';
 
             // Print window ke andar ka script: print dialog complete hote hi admin ko batata hai
             const printScript =
@@ -421,7 +502,7 @@
 
                     if (printed) {
                         const amount = calcAmount(item);
-                        const totalPages = pageList.length * copies;
+                        const totalPages = sheetCount(pageList.length, item.layout) * copies;
 
                         // 1) Record ko Printed karo aur image/PDF turant hata do
                         queueRef.child(id).update({
