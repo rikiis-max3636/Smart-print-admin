@@ -21,6 +21,9 @@
         .badge { background: rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
         .btn-print-all { background: #10b981; color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; transition: background 0.2s; }
         .btn-print-all:hover { background: #059669; }
+        .btn-wipe { background: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; transition: background 0.2s; }
+        .btn-wipe:hover { background: #dc2626; }
+        .btn-wipe:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .main-container { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
 
@@ -69,6 +72,7 @@
     <h1>📊 Live Counter Print Manager</h1>
     <div class="badge-container">
         <button class="btn-print-all" onclick="processEntireQueue()">⚡ Process & Print All Queue</button>
+        <button class="btn-wipe" id="wipeBtn" onclick="wipeAllNow()">🗑️ Delete All Data Now</button>
         <div class="badge">Independent Client Engine</div>
     </div>
 </header>
@@ -256,6 +260,34 @@
                 child.ref.remove();
             });
         }).catch(() => {});
+    }
+
+    // ---------- Fast delete button: saari requests + images turant delete ----------
+    // (Jo request abhi print ho rahi hai, wo print khatam hone tak bachi rehti hai.
+    //  "Aaj ki kamai" ke numbers delete nahi hote.)
+    function wipeAllNow() {
+        const btn = document.getElementById('wipeBtn');
+        btn.disabled = true;
+        queueRef.once('value').then((snap) => {
+            const updates = {};
+            let count = 0;
+            snap.forEach((child) => {
+                if (busyIds.has(child.key)) return;
+                updates[child.key] = null;
+                count++;
+            });
+            if (count === 0) return 0;
+            return queueRef.update(updates).then(() => count);
+        }).then((count) => {
+            btn.textContent = count ? "✅ " + count + " request delete ho gayi" : "✅ Database pehle se khali hai";
+        }).catch(() => {
+            btn.textContent = "❌ Delete fail, internet check karo";
+        }).then(() => {
+            setTimeout(() => {
+                btn.textContent = "🗑️ Delete All Data Now";
+                btn.disabled = false;
+            }, 2500);
+        });
     }
 
     function initSync() {
